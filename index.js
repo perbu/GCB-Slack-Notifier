@@ -1,11 +1,19 @@
-const { IncomingWebhook } = require('@slack/webhook');
+const {IncomingWebhook} = require('@slack/webhook');
 
-const SLACK_WEBHOOK_URL = ''; // Enter Your Slack Webhook URL here
 
-const webhook = new IncomingWebhook(SLACK_WEBHOOK_URL);
+/*
+  Create a config.js file with the following content:
+  module.exports = {
+  hook: 'https://hooks.slack.com/services/....', // Enter Your Slack Webhook URL here
+  baseUrl: 'https://github.com/.../' // The base url of your organization/bitbucket/github
+}
+
+ */
+const config = require('./config.js');
+const webhook = new IncomingWebhook(config.hook);
 
 // subscribe is the main function called by Cloud Functions.
-module.exports.subscribe = (event, callback) => {
+module.exports.subscribe = (event, context, callback) => {
   const build = eventToBuild(event.data);
 
   // Skip if the current status is not in the status list.
@@ -17,20 +25,20 @@ module.exports.subscribe = (event, callback) => {
     'FAILURE',
     'INTERNAL_ERROR',
     'TIMEOUT',
-    'QUEUED',
-    'CANCELLED',
   ];
 
   if (status.indexOf(build.status) === -1) {
-    return callback();
+    console.log(`Build ${build.id} status is ${build.status}, skipping notification`);
+    if (typeof callback === 'function') {
+      return callback();
+    }
+    console.log('callback is not a function');
+    return;
   }
 
   // Send message to Slack.
   const message = createSlackMessage(build);
-
-  (async () => {
-    await webhook.send(message);
-  })();
+  webhook.send(message, callback);
 };
 
 // eventToBuild transforms pubsub event message to a build object.
@@ -40,13 +48,15 @@ const eventToBuild = (data) => {
 
 // createSlackMessage create a message from a build object.
 const createSlackMessage = (build) => {
-  let buildId = build.id || '';
-  let buildCommit = build.substitutions.COMMIT_SHA || '';
-  let branch = build.substitutions.BRANCH_NAME || '';
-  let repoName = build.source.repoSource.repoName.split('_').pop() || ''; //Get repository name
-
+  // console.log('build:', build);
+  let buildId = build.id || '[no id]';
+  let buildCommit = build.substitutions.COMMIT_SHA || '[no SHA]';
+  let branch = build.substitutions.BRANCH_NAME || '[no branch]';
+  let repoName = build.substitutions.REPO_NAME || '[no repo name]';
+  const start = new Date(build.startTime);
+  const finish = new Date(build.finishTime);
   let message = {
-    text: `Build - \`${buildId}\``,
+    text: `Build - \`${buildId}\` of `+repoName+` on branch \`${branch}\``,
     mrkdwn: true,
     attachments: [
       {
@@ -54,22 +64,18 @@ const createSlackMessage = (build) => {
         title_link: build.logUrl,
         fields: [
           {
-            title: 'Status',
-            value: build.status,
-          },
-        ],
-      },
-      {
-        title: `Commit - ${buildCommit}`,
-        title_link: `https://bitbucket.org/<ORGANIZATION-NAME>/${repoName}/commits/${buildCommit}`, // Insert your Organization/Bitbucket/Github Url
-        fields: [
-          {
-            title: 'Branch',
-            value: branch,
+            title: 'Status: ' + build.status,
           },
           {
-            title: 'Repository',
-            value: repoName,
+            title: 'Duration: ' +  (finish.getTime()-start.getTime())/1000 + ' seconds',
+          },
+          {
+            title: 'Images',
+            value: build.images || '[no images]',
+          },
+          {
+            title: `Commit - ${buildCommit}`,
+            title_link: config.baseUrl + `${repoName}/commits/${buildCommit}`, // Insert your Organization/Bitbucket/Github Url
           },
         ],
       },
